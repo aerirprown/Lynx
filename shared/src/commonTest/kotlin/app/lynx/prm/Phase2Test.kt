@@ -37,6 +37,50 @@ class Phase2Test {
     }
 
     @Test
+    fun aNoteThatWasNeverPublishedSurvivesARestart() {
+        val files = platformFiles()
+        val prefs = MemoryPrefs("device-a", "Bob", files.tempDirectory(), "bob")
+        val clock = MutableClock(10_000)
+        val model = LynxModel(prefs, FolderPicker { null }, files, clock, UuidIds())
+        model.start()
+        model.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        val id = assertIs<Place.Person>(model.place).id
+        model.saveNote(id, null, "Not published yet", 10_000, "", null)
+
+        val again = LynxModel(prefs, FolderPicker { null }, files, clock, UuidIds())
+        again.start()
+        assertEquals("Not published yet", again.notes(id).single().body)
+        again.shutdown()
+    }
+
+    @Test
+    fun publishingLeavesNoCopyOfTheLibraryBehind() {
+        val files = platformFiles()
+        val prefs = MemoryPrefs("device-a", "Bob", files.tempDirectory(), "bob")
+        val model = LynxModel(prefs, FolderPicker { null }, files, MutableClock(10_000), UuidIds())
+        model.start()
+        model.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        model.shutdown()
+        assertEquals(listOf("work.sqlite"), files.listNames(prefs.workFolder).filter { !it.startsWith("work.sqlite-") })
+    }
+
+    @Test
+    fun aNewFolderDoesNotReceiveTheOldLibrary() {
+        val files = platformFiles()
+        val first = files.tempDirectory()
+        val second = files.tempDirectory()
+        val prefs = MemoryPrefs("device-a", "Bob", first, "bob")
+        val clock = MutableClock(10_000)
+        val model = LynxModel(prefs, FolderPicker { null }, files, clock, UuidIds())
+        model.start()
+        model.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        model.switchFolder(second)
+        model.startNewLibrary()
+        assertEquals(emptyList(), model.contacts.map { it.displayName })
+        model.shutdown()
+    }
+
+    @Test
     fun twoPrefixesInOneFolderMergeBothNotes() {
         val files = platformFiles()
         val folder = files.tempDirectory()
@@ -69,6 +113,7 @@ private class MemoryPrefs(
     folder: String,
     prefix: String,
 ) : InstallPrefs {
+    override val workFolder: String = platformFiles().tempDirectory()
     override var libraryFolder: String? = folder
     override var prefix: String = prefix
     override var libraryId: String? = null

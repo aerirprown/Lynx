@@ -34,6 +34,7 @@ dependencies {
     implementation(libs.work.runtime)
     implementation(libs.core.ktx)
     implementation(libs.lifecycle.runtime)
+    implementation(libs.lifecycle.process)
     implementation(compose.runtime)
     implementation(compose.foundation)
     implementation(compose.material3)

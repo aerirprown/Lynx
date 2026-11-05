@@ -1,9 +1,13 @@
 package app.lynx.prm.library
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import app.cash.sqldelight.db.AfterVersion
+import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlSchema
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import app.lynx.prm.db.LynxDatabase
 import java.io.File
@@ -28,20 +32,20 @@ class AndroidPlatformFiles(private val context: Context) : PlatformFiles {
 
     override fun exists(path: String): Boolean {
         val document = document(path)
-        return if (document != null) document.exists() else databaseFile(path).exists()
+        return if (document != null) document.exists() else File(path).exists()
     }
 
     override fun size(path: String): Long {
         val document = document(path)
         return when {
             document != null -> if (document.exists()) document.length() else 0L
-            else -> databaseFile(path).takeIf { it.exists() }?.length() ?: 0L
+            else -> File(path).takeIf { it.exists() }?.length() ?: 0L
         }
     }
 
     override fun read(path: String): ByteArray {
         val document = document(path)
-        if (document == null) return databaseFile(path).readBytes()
+        if (document == null) return File(path).readBytes()
         return context.contentResolver.openInputStream(document.uri)?.use { it.readBytes() }
             ?: error("Could not read ${document.name}.")
     }
@@ -49,7 +53,7 @@ class AndroidPlatformFiles(private val context: Context) : PlatformFiles {
     override fun write(path: String, bytes: ByteArray) {
         val located = safLocation(path)
         if (located == null) {
-            val file = databaseFile(path)
+            val file = File(path)
             file.parentFile?.mkdirs()
             file.writeBytes(bytes)
             return
@@ -59,13 +63,9 @@ class AndroidPlatformFiles(private val context: Context) : PlatformFiles {
 
     override fun delete(path: String) {
         val document = document(path)
-        if (document != null) {
-            if (document.exists()) document.delete()
-        } else {
-            val file = databaseFile(path)
-            file.delete()
-            File(file.path + "-wal").delete()
-            File(file.path + "-shm").delete()
+        when {
+            document != null -> if (document.exists()) document.delete()
+            safLocation(path) == null -> SQLiteDatabase.deleteDatabase(File(path))
         }
     }
 
@@ -85,22 +85,28 @@ class AndroidPlatformFiles(private val context: Context) : PlatformFiles {
         document(child(tree, tmpName))?.delete()
     }
 
-    override fun openDriver(path: String): SqlDriver {
+    override fun openWorkDriver(path: String): SqlDriver {
         check(safLocation(path) == null) { "SQLite is only opened on the private working copy." }
-        val file = databaseFile(path)
-        file.parentFile?.mkdirs()
-        return AndroidSqliteDriver(LynxDatabase.Schema, context, file.name)
+        File(path).parentFile?.mkdirs()
+        return AndroidSqliteDriver(LynxDatabase.Schema, context, path)
     }
 
-    private fun databaseFile(path: String): File {
-        val requested = File(path)
-        if (!requested.absolutePath.startsWith(context.cacheDir.absolutePath)) return requested
-        val key = requested.absolutePath.hashCode().toUInt().toString(16)
-        return context.getDatabasePath("lynx-$key.sqlite")
+    override fun openPeerDriver(path: String): SqlDriver {
+        check(safLocation(path) == null) { "SQLite is only opened on a private copy." }
+        return AndroidSqliteDriver(PeerSchema, context, path)
     }
 
     override fun checkpoint(driver: SqlDriver) {
-        driver.execute(null, "PRAGMA wal_checkpoint(TRUNCATE)", 0, null).value
+        driver.executeQuery(
+            null,
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+            { cursor ->
+                cursor.next()
+                QueryResult.Unit
+            },
+            0,
+            null,
+        ).value
     }
 
     private fun writeDocument(tree: String, name: String, bytes: ByteArray) {
@@ -136,6 +142,24 @@ class AndroidPlatformFiles(private val context: Context) : PlatformFiles {
         if (bar <= 0) return null
         return rest.substring(0, bar) to rest.substring(bar + 1)
     }
+}
+
+/**
+ * A published file already has its tables, and its SQLite version number depends on the
+ * device that wrote it. The desktop leaves it at 0, which Android would otherwise take for
+ * a new database. This schema stands above any version a file can carry and changes nothing.
+ */
+private object PeerSchema : SqlSchema<QueryResult.Value<Unit>> {
+    override val version: Long = 1_000_000
+
+    override fun create(driver: SqlDriver): QueryResult.Value<Unit> = QueryResult.Unit
+
+    override fun migrate(
+        driver: SqlDriver,
+        oldVersion: Long,
+        newVersion: Long,
+        vararg callbacks: AfterVersion,
+    ): QueryResult.Value<Unit> = QueryResult.Unit
 }
 
 private object JvmStyleReplace {

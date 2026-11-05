@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import app.lynx.prm.match.sanitizePrefix
 import app.lynx.prm.ui.InstallPrefs
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 
@@ -31,6 +32,9 @@ class AndroidPrefs(context: Context) : InstallPrefs {
             if (!named.isNullOrBlank()) return named
             return Build.MODEL?.takeIf { it.isNotBlank() } ?: "android"
         }
+
+    override val workFolder: String
+        get() = File(appContext.filesDir, "library").also { it.mkdirs() }.absolutePath
 
     override var libraryFolder: String?
         get() = preferences.getString(KEY_FOLDER, null)?.takeIf { it.isNotBlank() }

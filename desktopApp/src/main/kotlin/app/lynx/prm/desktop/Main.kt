@@ -63,6 +63,9 @@ private class DesktopPrefs : InstallPrefs {
     override val deviceName: String
         get() = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrDefault("desktop")
 
+    override val workFolder: String
+        get() = file.parent.toString()
+
     override var libraryFolder: String?
         get() = properties.getProperty("library_folder")?.takeIf { it.isNotBlank() }
         set(value) = put("library_folder", value)

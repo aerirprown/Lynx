@@ -12,7 +12,13 @@ interface PlatformFiles {
     fun write(path: String, bytes: ByteArray)
     fun delete(path: String)
     fun replace(directory: String, fileName: String, bytes: ByteArray)
-    fun openDriver(path: String): SqlDriver
+
+    /** Opens the private working copy and creates its schema when the file is new. */
+    fun openWorkDriver(path: String): SqlDriver
+
+    /** Opens a private copy of a published file as it is, whichever device wrote it. */
+    fun openPeerDriver(path: String): SqlDriver
+
     fun checkpoint(driver: SqlDriver)
 }
 

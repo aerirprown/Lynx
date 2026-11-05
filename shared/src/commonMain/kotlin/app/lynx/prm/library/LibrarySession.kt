@@ -1,5 +1,6 @@
 package app.lynx.prm.library
 
+import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.lynx.prm.db.Clock
 import app.lynx.prm.db.Ids
@@ -98,6 +99,12 @@ class LibrarySession(
         database = null
     }
 
+    /** Called after publishing to the old folder, so that library doesn't follow into a new folder. */
+    fun discardWorkingCopy() {
+        close()
+        files.delete(files.child(workFolder, WORK_FILE))
+    }
+
     private fun refresh(publishOwnFile: Boolean): OpenResult {
         val inspected = inspectFolder()
         val valid = inspected.filterIsInstance<ValidFile>()
@@ -119,12 +126,20 @@ class LibrarySession(
 
     private fun openWork() {
         if (database != null) return
-        val path = files.child(workFolder, "work.sqlite")
-        val opened = files.openDriver(path)
+        val opened = files.openWorkDriver(files.child(workFolder, WORK_FILE))
         driver = opened
         opened.execute(null, "PRAGMA foreign_keys=ON", 0, null).value
-        LynxDatabase.Schema.create(opened).value
-        opened.execute(null, "PRAGMA journal_mode=WAL", 0, null).value
+        // This pragma returns a row, so it has to run as a query on older Android versions.
+        opened.executeQuery(
+            null,
+            "PRAGMA journal_mode=WAL",
+            { cursor ->
+                cursor.next()
+                QueryResult.Unit
+            },
+            0,
+            null,
+        ).value
         opened.execute(null, "PRAGMA synchronous=FULL", 0, null).value
         database = LynxDatabase(opened)
         writeMeta("schema_version", SCHEMA_VERSION.toString())
@@ -140,7 +155,7 @@ class LibrarySession(
         writeMeta("file_prefix", prefix)
         writeMeta("published_at", clock.epochMs().toString())
         files.checkpoint(opened)
-        val bytes = files.read(files.child(workFolder, "work.sqlite"))
+        val bytes = files.read(files.child(workFolder, WORK_FILE))
         check(bytes.isSqliteDatabase()) { "The working database is not a SQLite file." }
         files.replace(libraryFolder, fileName, bytes)
     }
@@ -179,15 +194,49 @@ class LibrarySession(
     }
 
     private fun openCopy(bytes: ByteArray): OpenedDatabase {
-        val path = files.child(files.tempDirectory(), "peer.sqlite")
+        val path = files.child(workFolder, PEER_FILE)
+        files.delete(path)
         files.write(path, bytes)
-        val driver = files.openDriver(path)
-        driver.execute(null, "PRAGMA foreign_keys=ON", 0, null).value
-        return OpenedDatabase(driver, LynxDatabase(driver))
+        val driver = files.openPeerDriver(path)
+        try {
+            addMissingColumns(driver)
+        } catch (error: Exception) {
+            driver.close()
+            files.delete(path)
+            throw error
+        }
+        return OpenedDatabase(driver, LynxDatabase(driver)) { files.delete(path) }
     }
 
-    private class OpenedDatabase(val driver: SqlDriver, val db: LynxDatabase) : AutoCloseable {
-        override fun close() = driver.close()
+    /** Test builds published files before `merged_into` existed. This changes only the private copy. */
+    private fun addMissingColumns(driver: SqlDriver) {
+        val columns = driver.executeQuery(
+            null,
+            "PRAGMA table_info(contact)",
+            { cursor ->
+                val names = mutableListOf<String>()
+                while (cursor.next().value) {
+                    cursor.getString(1)?.let { names += it }
+                }
+                QueryResult.Value(names)
+            },
+            0,
+            null,
+        ).value
+        if ("merged_into" !in columns) {
+            driver.execute(null, "ALTER TABLE contact ADD COLUMN merged_into TEXT", 0, null).value
+        }
+    }
+
+    private class OpenedDatabase(
+        val driver: SqlDriver,
+        val db: LynxDatabase,
+        private val onClose: () -> Unit,
+    ) : AutoCloseable {
+        override fun close() {
+            driver.close()
+            onClose()
+        }
     }
 
     private sealed interface InspectedFile
@@ -203,5 +252,7 @@ class LibrarySession(
 
     private companion object {
         val LYNX_FILE = Regex(".+_lynx\\.sqlite")
+        const val WORK_FILE = "work.sqlite"
+        const val PEER_FILE = "peer.sqlite"
     }
 }

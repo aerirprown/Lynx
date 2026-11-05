@@ -24,6 +24,7 @@ work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work"
 documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

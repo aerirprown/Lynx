@@ -25,6 +25,7 @@ import kotlinx.datetime.Instant
 interface InstallPrefs {
     val deviceId: String
     val deviceName: String
+    val workFolder: String
     var libraryFolder: String?
     var prefix: String
     var libraryId: String?
@@ -90,8 +91,12 @@ class LynxModel(
     var phoneAccess by mutableStateOf<PhoneAccess?>(null)
     var dialNumber: ((String) -> Unit)? = null
     var pendingPerson: String? = null
+    var onLibraryOpened: (() -> Unit)? = null
     private var session: LibrarySession? = null
     private val announced = mutableSetOf<String>()
+
+    /** Screens read notes and tags straight from the database, so a save has to tell them to look again. */
+    private var revision by mutableStateOf(0)
 
     val prefix: String get() = prefs.prefix
     var folder by mutableStateOf(prefs.libraryFolder)
@@ -129,8 +134,7 @@ class LynxModel(
     }
 
     fun switchFolder(path: String) {
-        session?.sync()
-        session?.close()
+        if (syncSession() is OpenResult.Ready) session?.discardWorkingCopy() else session?.close()
         session = null
         prefs.libraryFolder = path
         folder = path
@@ -147,7 +151,7 @@ class LynxModel(
     fun usePrefix(raw: String) {
         val previous = session?.fileName
         val folder = prefs.libraryFolder
-        session?.sync()
+        syncSession()
         session?.close()
         session = null
         prefs.prefix = raw
@@ -189,20 +193,41 @@ class LynxModel(
     }
 
     fun syncNow() {
-        val result = session?.sync()
-        if (result is OpenResult.PrefixInUse) {
-            editor = Editor.PrefixClash(result.fileName, result.suggestedPrefix)
-            return
+        when (val result = syncSession()) {
+            is OpenResult.PrefixInUse -> editor = Editor.PrefixClash(result.fileName, result.suggestedPrefix)
+            is OpenResult.Ready -> {
+                reload()
+                status = "Synced."
+                statusGood = true
+            }
+            else -> Unit
         }
-        reload()
-        status = "Synced."
-        statusGood = true
+    }
+
+    /** Merges the other files and publishes this device's file, as Sync now does but without saying so. */
+    fun publish() {
+        when (val result = syncSession()) {
+            is OpenResult.PrefixInUse -> editor = Editor.PrefixClash(result.fileName, result.suggestedPrefix)
+            is OpenResult.Ready -> reload()
+            else -> Unit
+        }
     }
 
     fun shutdown() {
-        session?.sync()
+        syncSession()
         session?.close()
         session = null
+    }
+
+    private fun syncSession(): OpenResult? {
+        val current = session ?: return null
+        return try {
+            current.sync()
+        } catch (_: Exception) {
+            status = "Lynx could not reach the shared folder. Your changes are safe on this device."
+            statusGood = false
+            null
+        }
     }
 
     fun checkDue() {
@@ -216,9 +241,9 @@ class LynxModel(
         banner = null
     }
 
-    fun contactName(id: String): String = store()?.contact(id)?.displayName ?: "Someone"
+    fun contactName(id: String): String = liveStore()?.contact(id)?.displayName ?: "Someone"
     fun notePreview(id: String): String =
-        store()?.visibleNotes(id)?.firstOrNull()?.body?.lineSequence()?.firstOrNull()?.ifBlank { "No notes yet" }
+        liveStore()?.visibleNotes(id)?.firstOrNull()?.body?.lineSequence()?.firstOrNull()?.ifBlank { "No notes yet" }
             ?: "No notes yet"
 
     fun isOverdue(reminder: Reminder): Boolean = reminder.dueAt < clock.epochMs()
@@ -293,14 +318,14 @@ class LynxModel(
         selectedTagIds = selectedTagIds - id
     }
 
-    fun person(id: String) = store()?.contact(id)
-    fun phones(id: String) = store()?.phones(id).orEmpty()
-    fun emails(id: String) = store()?.emails(id).orEmpty()
-    fun notes(id: String) = store()?.visibleNotes(id).orEmpty()
-    fun personTags(id: String) = store()?.tagsFor(id).orEmpty()
+    fun person(id: String) = liveStore()?.contact(id)
+    fun phones(id: String) = liveStore()?.phones(id).orEmpty()
+    fun emails(id: String) = liveStore()?.emails(id).orEmpty()
+    fun notes(id: String) = liveStore()?.visibleNotes(id).orEmpty()
+    fun personTags(id: String) = liveStore()?.tagsFor(id).orEmpty()
     fun personReminders(id: String) = reminders.filter { it.contactId == id }
-    fun note(id: String) = store()?.note(id)
-    fun reminder(id: String) = store()?.reminder(id)
+    fun note(id: String) = liveStore()?.note(id)
+    fun reminder(id: String) = liveStore()?.reminder(id)
 
     private fun open(folder: String, prefix: String) {
         val opening = LibrarySession(
@@ -313,6 +338,7 @@ class LynxModel(
             clock = clock,
             ids = ids,
             files = files,
+            workFolder = prefs.workFolder,
         )
         when (val result = opening.open()) {
             is OpenResult.Ready -> {
@@ -332,6 +358,7 @@ class LynxModel(
                 } else if (place == Place.Setup) {
                     place = Place.Home
                 }
+                onLibraryOpened?.invoke()
             }
             is OpenResult.FilesNotOnDevice -> {
                 opening.close()
@@ -350,6 +377,7 @@ class LynxModel(
 
     private fun reload() {
         val store = store() ?: return
+        revision++
         val found = if (search.isBlank()) store.listContacts() else store.search(search)
         val selected = selectedTagIds
         contacts = if (selected.isEmpty()) {
@@ -370,6 +398,8 @@ class LynxModel(
     }
 
     private fun store() = session?.store()
+
+    private fun liveStore() = store().also { revision }
 
     private inline fun edit(block: () -> Unit) {
         try {
