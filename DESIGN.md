@@ -524,6 +524,8 @@ Request contacts and notifications in context, on the setup screen, with the rea
 
 Do not declare a dialer role, an in-call service, or `ACTION_DIAL` as an activity filter that would make Lynx the default phone app. `ACTION_DIAL` is an intent Lynx sends, not one it handles.
 
+Set `android:allowBackup="false"`. The shared folder is the backup. Android’s automatic backup would copy notes and contacts to the person’s Google account, and restoring `device_id` on a new phone would give two phones the same id.
+
 Play listing, when there is one, needs a privacy policy that says: contacts and notes stay in the user’s SQLite file, call prompts read only the phone app’s call notification title, declined prompts are not stored, and there is no Lynx server. Publishing to Play is out of scope for the build.
 
 ## Phases

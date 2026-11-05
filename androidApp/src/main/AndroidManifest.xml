@@ -12,7 +12,7 @@
 
     <application
         android:name=".LynxApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_lynx"
         android:label="Lynx"
         android:supportsRtl="true"
