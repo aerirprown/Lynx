@@ -17,6 +17,7 @@ People use it for clients, colleagues, friends, and family. A contact can be mar
 - No accounts, no server, no analytics, no crash reporter, no push token.
 - Each device publishes its own `{prefix}_lynx.sqlite` in the shared folder. Sync merges those files row by row. Do not replace one whole database with another.
 - Identifiers are UUID strings generated on the device. Do not use SQLite `AUTOINCREMENT` for rows that sync.
+- Several Android phones can share one library. A person held on two phones becomes one contact, under the rules in Joining contacts.
 - The app is dark. Every color comes from the Theme section. Do not use Material’s default purple scheme, and do not turn on Android dynamic color.
 - Each phase ends in a runnable app and the tests listed for that phase. Do not start a later phase with the current phase’s tests failing.
 
@@ -69,6 +70,8 @@ Suggested package split inside `app.lynx.prm`: `db`, `library`, `match`, `contac
 7. Tag a contact, and add a reminder from the contact or from a note, with a due time. Open reminders show on the home screen. On Android, a due reminder also posts a notification.
 8. Later, on the phone or the desktop, search the person and read every note, whether it was typed by hand or saved from a prompt. Tags, reminders, and notes from every device are there after a merge.
 
+A second Android phone joins the same way: pick the same folder, give it its own prefix, and allow contacts access. A person held on both phones becomes one contact.
+
 Desktop cannot see calls. A conversation logged there is a manual note: open the person, add a note, set the time if it was earlier. The phone has that same manual action. A missed prompt is not the only reason to use it.
 
 ## After a call
@@ -96,7 +99,7 @@ Also ask when a new `missed_call` notification is posted, because a missed call 
 
 Ask once per call. If a prompt for the same title was shown in the last 60 seconds, do not ask again. That covers the case where the ringing notification goes away and a missed-call notification follows.
 
-The question is a high-priority notification, not an activity that takes over the screen.
+The question is a high-priority notification, not an activity that takes over the screen. Posting it needs `POST_NOTIFICATIONS`, like every Lynx notification.
 
 | Situation | Notification text |
 | --- | --- |
@@ -113,9 +116,9 @@ Actions: **Add note** and **Not now**. The notification goes away on its own aft
 
 - One clear match: that contact, with a way to change it.
 - Several matches: those contacts, and a search box.
-- No match: the captured name or number, a search of Lynx contacts, and **Create contact**.
+- No match: the captured name or number, a search of Lynx contacts, and **Create contact**. When the captured title is a phone number and the user chooses a contact from the search, **This is the same person** saves that number on the chosen contact, so the next call from it matches.
 
-Saving with an empty body is refused. Saving writes one note and, if the user created a contact, that contact. `source` is `call_prompt`. `occurred_at` is the time the call notification was first seen, or “now” for a missed-call notification. Direction is `missed` for a missed-call notification and `unknown` otherwise. Do not infer incoming versus outgoing from notification text.
+Saving with an empty body is refused. Saving writes one note, plus that contact if the user created one, plus one `phone` row if the user chose **This is the same person**. `source` is `call_prompt`. `occurred_at` is the time the call notification was first seen, or “now” for a missed-call notification. Direction is `missed` for a missed-call notification and `unknown` otherwise. Do not infer incoming versus outgoing from notification text.
 
 ### Service shape
 
@@ -137,7 +140,11 @@ On first grant, and again each time the Android app becomes active, import:
 
 Skip a contact that has no name and no phone number.
 
-Upsert by `android_lookup_key`. When the key matches, replace the Lynx name, organization, and title with the phone’s current values and set `updated_at` and `updated_by`. Do not touch notes, tags, or reminders. Match phones and emails already on that contact by normalized number or by email address: update the label in place, insert a missing one, and soft-delete one the phone no longer has. Do not delete and recreate those rows. New ids on every import would survive merge as duplicates. A Lynx contact with no lookup key was created inside Lynx; import must not delete or merge it except through the explicit “this is the same person” action in the unmatched-call composer.
+Upsert by `android_lookup_key`. Look the key up across every contact row, including soft-deleted ones. If the row found has `merged_into` set, follow it to the end and use that contact, so a phone whose key sits on a joined contact updates the survivor and does not recreate the person.
+
+Each Android install keeps a private import record: for each lookup key, the name, organization, title, numbers, and emails it saw at its last import. The record lives in app storage outside `work.sqlite`, so it is never published. Import writes only what differs from that record, so two phones that spell a person differently do not overwrite each other on every open.
+
+When the key matches, write a name, organization, or title that changed on this phone, and set `updated_at` and `updated_by`. Do not touch notes, tags, or reminders. Match phones and emails already on that contact by normalized number or by email address: update a changed label in place, insert a missing one, and soft-delete one that is in this phone’s import record and that the phone no longer has. Do not remove a number or email this phone never imported, because another phone may have added it. Do not delete and recreate those rows. New ids on every import would survive merge as duplicates. A Lynx contact with no lookup key was created inside Lynx; import must not delete it, and it never joins another contact automatically. Only **This is the same person** on the Contact screen joins it to another contact.
 
 If a phone contact disappears, leave the Lynx contact and its notes as they are.
 
@@ -194,7 +201,7 @@ Add one from the contact screen, or from the note composer with an optional “R
 
 The home screen lists open reminders above the contacts: overdue first, then soonest due. Each row shows the contact name, the body, and the due time. Tapping the row opens the contact. **Done** sets `done_at`. The user can change the body and the due time until then. Deleting a reminder soft-deletes it.
 
-Android posts a notification when a reminder comes due, using WorkManager, and reschedules every open reminder on startup and after a merge. The notification title is the contact name and the text is the reminder body. Tapping it opens the contact. This uses the same `POST_NOTIFICATIONS` permission as the call prompt. Do not schedule exact alarms.
+Android posts a notification when a reminder comes due, using WorkManager, and reschedules every open reminder on startup and after a merge. The notification title is the contact name and the text is the reminder body. Tapping it opens the contact. This uses the same `POST_NOTIFICATIONS` permission as the call prompt and does not depend on notification access. Do not schedule exact alarms.
 
 Desktop has no background notifier. The home list is the reminder. While the window is open, check once a minute and show an in-app banner for anything newly due.
 
@@ -263,7 +270,7 @@ Changing the prefix publishes the new name. If the previous file’s `device_id`
 
 ### What to tell the user
 
-On setup and in settings: each device has its own file in the shared folder; opening Lynx, leaving it, or tapping Sync now pulls in everyone else’s file; two edits to the same note keep the edit that was saved later.
+On setup and in settings: each device has its own file in the shared folder; opening Lynx, leaving it, or tapping Sync now pulls in everyone else’s file; two edits to the same note keep the edit that was saved later; a person held on two phones becomes one contact.
 
 ## Merge
 
@@ -276,15 +283,39 @@ For one id:
 - Missing locally: insert the incoming row.
 - Present locally: keep the row with the greater `updated_at`. If the timestamps are equal, keep the row whose `updated_by` is lexicographically greater.
 
-Copy the whole winning row. Do not mix columns from both versions.
+Copy the whole winning row. Do not mix columns from both versions. One exception: when only one copy of a contact has `merged_into` set, keep that copy, so an older device’s edit never undoes a join.
 
 A delete sets `deleted_at` and sets `updated_at` to that moment. A later delete beats an earlier edit. A later edit beats an earlier delete and the row is visible again.
 
 Times are the device’s wall clock. v1 does not try to correct a clock that is set ahead.
 
-After the row merge, collapse tags. Group non-deleted tags by normalized name. The survivor is the one with the earliest `created_at`, then the smallest id. For each loser, point its non-deleted `contact_tag` rows at the survivor. If that contact already has a non-deleted link to the survivor, soft-delete the extra link. Soft-delete the loser tag. Those writes use the current time and this device’s `device_id`, so the collapse wins against the old loser rows on the next merge.
+After the row merge, join contacts under the rules in Joining contacts, then collapse tags. Group non-deleted tags by normalized name. The survivor is the one with the earliest `created_at`, then the smallest id. For each loser, point its non-deleted `contact_tag` rows at the survivor. If that contact already has a non-deleted link to the survivor, soft-delete the extra link. Soft-delete the loser tag. Those writes use the current time and this device’s `device_id`, so the collapse wins against the old loser rows on the next merge.
 
 Rows the other device has never seen stay as they are. A note added on the phone and a different note added on the desktop both remain. A name edited on the desktop and a tag added on the phone both remain, because they are different rows. Two edits to the same note keep the newer save only. State that limit in settings in one sentence. Do not build a side-by-side editor for that case.
+
+### Joining contacts
+
+Each phone imports people under its own new ids, so one person can arrive from two phones as two rows. Joining turns them into one contact. It runs after every row merge, and the same files give the same result on every device.
+
+Two non-deleted contacts that both have an `android_lookup_key` join automatically when either of these holds:
+
+- They have the same `android_lookup_key`.
+- They have the same name, compared as in Matching a caller, and they share a phone number under the rule in Phone numbers, or an email address compared trimmed and case-insensitive.
+
+If A joins B and B joins C, all three join. Do not join on a shared number or email alone, because families and offices share them. A contact with no lookup key never joins automatically.
+
+Everything else is joined by hand with **This is the same person** on the Contact screen. It uses the same steps and is confirmed first, because a join has no undo in v1.
+
+To join a group:
+
+1. The survivor is the contact with the earliest `created_at`, then the smallest id. It keeps its own name, kind, organization, title, and lookup key.
+2. Point the other contacts’ non-deleted `phone`, `email`, `note`, `contact_tag`, and `reminder` rows at the survivor.
+3. Where the survivor now has the same number, email, or tag twice, keep the row with the earliest `created_at`, then the smallest id, and soft-delete the rest.
+4. Soft-delete each other contact and set its `merged_into` to the survivor.
+
+Those writes use the current time and this device’s `device_id`, so the join wins against the old rows on the next merge.
+
+On every merge, also move any non-deleted row that still points at a contact with `merged_into` set to the end of that contact’s `merged_into` chain. A note added on another device before it saw the join lands on the survivor and is not lost.
 
 ## Database
 
@@ -303,6 +334,7 @@ CREATE TABLE contact (
   job_title TEXT,
   kind TEXT NOT NULL DEFAULT 'unspecified',
   android_lookup_key TEXT,
+  merged_into TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL,
@@ -386,7 +418,7 @@ CREATE INDEX note_contact_occurred ON note(contact_id, occurred_at);
 CREATE INDEX contact_tag_contact ON contact_tag(contact_id);
 CREATE INDEX contact_tag_tag ON contact_tag(tag_id);
 CREATE INDEX reminder_open_due ON reminder(done_at, due_at);
-CREATE UNIQUE INDEX contact_lookup ON contact(android_lookup_key);
+CREATE INDEX contact_lookup ON contact(android_lookup_key);
 ```
 
 `kind` is `personal`, `business`, or `unspecified`. `source` is `call_prompt` or `manual`. `call_direction` is `missed`, `unknown`, or null. `updated_by` is the `device_id` of the install that last wrote the row. `note_id` on a reminder is null when the reminder was added from the contact rather than from a note.
@@ -395,7 +427,9 @@ Meta keys written by the app: `schema_version`, `library_id` (set once when the 
 
 `schema_version` starts at `1`. Ship schema changes as SQLDelight migrations. Do not edit a shipped migration.
 
-The unique index on `android_lookup_key` allows many nulls, which is what SQLite does, so hand-created contacts are fine.
+The index on `android_lookup_key` is not unique, because two phones can import one person under different ids with the same key, and merge has to accept both rows before they join. Hand-created contacts leave the key null.
+
+`merged_into` is null until a contact is joined into another. It has no foreign key, because merge can insert a joined contact before its survivor.
 
 ## Phone numbers
 
@@ -462,17 +496,17 @@ Empty states, the after-call notification, and the Android reminder notification
 
 One navigation structure on both platforms. Compact width is a single column with a back stack. Expanded width (a desktop window, or a wide phone in landscape is optional) shows the contact list beside the open contact.
 
-**Setup.** Short explanation of the shared folder, a button to choose it, and the prefix field with the device name filled in and the file name shown beside it (`bob_lynx.sqlite`). Android adds the contacts permission and the notification-access step here, each with a skip. Skipping contacts is allowed. Skipping notification access leaves call prompts and reminder notifications off and shows a note on the home screen.
+**Setup.** Short explanation of the shared folder, a button to choose it, and the prefix field with the device name filled in and the file name shown beside it (`bob_lynx.sqlite`). Android adds the contacts permission, the notifications permission (`POST_NOTIFICATIONS`), and the notification-access step here, each with a skip. Skipping contacts is allowed. Skipping notification access turns off call detection only. Skipping the notifications permission turns off every Lynx notification. Either one shows a note on the home screen.
 
 **Home.** Open reminders, then a search field, then tag filter chips when any tags exist, then the contacts. Contact rows: name, organization if any, up to three tag chips, and the first line of the latest note or “No notes yet”. A floating or toolbar action creates a contact.
 
-**Contact.** Name, kind, organization, title, tags. Numbers and emails. Number rows on Android are tappable and dial. Open reminders for this person, with **Add reminder**. Note list, newest first, each showing time and body. **Add note** is a visible primary action on this screen, on Android and desktop. Edit contact. Delete contact sets `deleted_at` and bumps `updated_at` and `updated_by`, and is confirmed first. Notes, tags links, and reminders stay in the file on that contact id and disappear from lists because the contact is hidden.
+**Contact.** Name, kind, organization, title, tags. Numbers and emails. Number rows on Android are tappable and dial. Open reminders for this person, with **Add reminder**. Note list, newest first, each showing time and body. **Add note** is a visible primary action on this screen, on Android and desktop. Edit contact. **This is the same person** searches for another contact and, after a confirmation, joins the two under the rules in Joining contacts. Delete contact sets `deleted_at` and bumps `updated_at` and `updated_by`, and is confirmed first. Notes, tags links, and reminders stay in the file on that contact id and disappear from lists because the contact is hidden.
 
 **Note composer.** Body, date and time of the conversation, optional reminder body and due time, Save, Cancel. Opened from a contact, that contact is already selected and is not asked for again. Opened from a call prompt, the contact chooser described in After a call sits at the top. Save is enabled only when a contact is chosen and the note body is non-blank. A reminder whose body is blank is not written.
 
 **Reminder editor.** Body and due date and time. Used from the contact screen and from the home row’s edit. **Done** is on the home row and on the contact’s reminder row.
 
-**Settings.** Current folder, prefix and the resulting file name, the other Lynx files found in the folder, Change folder, Sync now, last published time, tag list with rename and delete, phone region, and on Android the two permission rows with their current state.
+**Settings.** Current folder, prefix and the resulting file name, the other Lynx files found in the folder, Change folder, Sync now, last published time, tag list with rename and delete, phone region, and on Android three permission rows with their current state: contacts, notifications, and notification access.
 
 **Prefix clash.** The block described under Publishing. The user cannot leave setup, or cannot save the new prefix, until the file name is free for this device.
 
@@ -486,7 +520,7 @@ Declare only:
 - `POST_NOTIFICATIONS` (request at runtime on API 33+)
 - The notification listener service binding permission on the service, not as a normal dangerous permission
 
-Request contacts and notifications in context, on the setup screen, with the reason visible before the system dialog. Notification access is a settings intent (`ACTION_NOTIFICATION_LISTENER_SETTINGS`), not a runtime permission dialog.
+Request contacts and notifications in context, on the setup screen, with the reason visible before the system dialog. Notification access is a settings intent (`ACTION_NOTIFICATION_LISTENER_SETTINGS`), not a runtime permission dialog. Notification access controls call detection only. `POST_NOTIFICATIONS` controls every Lynx notification.
 
 Do not declare a dialer role, an in-call service, or `ACTION_DIAL` as an activity filter that would make Lynx the default phone app. `ACTION_DIAL` is an intent Lynx sends, not one it handles.
 
@@ -496,7 +530,7 @@ Play listing, when there is one, needs a privacy policy that says: contacts and 
 
 ### Phase 1 — Shared core, no UI
 
-Schema, repositories for contacts, notes, tags, and reminders, phone normalization, caller matching, prefix sanitizing, and merge against temp directories and a fake clock.
+Schema, repositories for contacts, notes, tags, and reminders, phone normalization, caller matching, prefix sanitizing, and merge, including joining contacts, against temp directories and a fake clock.
 
 Tests, JVM, `shared/src/commonTest`:
 
@@ -511,20 +545,26 @@ Tests, JVM, `shared/src/commonTest`:
 - The same note id keeps the body with the later `updated_at`. Equal timestamps keep the greater `updated_by`.
 - A later delete hides a row. A later edit makes a deleted row visible again.
 - Two tags with different ids and the same normalized name collapse to one, and contact links follow the survivor.
+- Two imported contacts with different ids and the same `android_lookup_key` merge without error into one contact, with every note kept.
+- Two imported contacts with the same name and a shared number join. With different names and a shared number, they stay two contacts.
+- A contact with no lookup key never joins automatically. **This is the same person** joins it, and its notes, tags, and reminders move to the survivor.
+- Merging the same files in either order picks the same survivor.
+- A note added to a joined contact on a device that had not seen the join ends up on the survivor.
+- An older device’s edit to a joined contact does not bring it back.
 - A reminder marked done on one file stays done after merge with an older open copy.
 - Publish is refused when the prefixed file’s `device_id` belongs to another install, and that file’s bytes are unchanged.
 
 ### Phase 2 — Desktop
 
-Runnable with `:desktopApp:run` on Windows and on Linux. The window uses the Night Flat colors from Theme, with dynamic color off. Setup folder picker and prefix, home with reminders and tag filters, contact, composer, reminder editor, settings, sync now. Creating a contact, tagging it, adding a note, adding a reminder, restarting the app, and seeing all three is the demo on each OS. Point two installs at one folder, give them different prefixes, add a different note on each, sync, and see both notes on both. Pointing the folder at a real cloud directory is a manual check, not a unit test. A file written on one OS merges on the other.
+Runnable with `:desktopApp:run` on Windows and on Linux. The window uses the Night Flat colors from Theme, with dynamic color off. Setup folder picker and prefix, home with reminders and tag filters, contact, composer, reminder editor, settings, sync now. Creating a contact, tagging it, adding a note, adding a reminder, restarting the app, and seeing all three is the demo on each OS. Joining two contacts with **This is the same person** and seeing one contact with both sets of notes is part of that demo. Point two installs at one folder, give them different prefixes, add a different note on each, sync, and see both notes on both. Pointing the folder at a real cloud directory is a manual check, not a unit test. A file written on one OS merges on the other.
 
 ### Phase 3 — Android contacts
 
-Same screens on a device or emulator. The prefix field opens filled with the phone’s name. Contacts import and `ACTION_DIAL`. From an imported contact, Add note, a tag, and a reminder survive a restart. A due reminder posts a notification. Deny-permission path still creates a hand-entered contact and a note on it. Import test can be a JVM test of the mapper: a fake provider row becomes a contact, a second import updates the name without dropping a note, and a second import of the same number keeps the same phone row id. The on-device check is the import, the manual note, the tag, and the reminder notification.
+Same screens on a device or emulator. The prefix field opens filled with the phone’s name. Contacts import and `ACTION_DIAL`. From an imported contact, Add note, a tag, and a reminder survive a restart. A due reminder posts a notification. Deny-permission path still creates a hand-entered contact and a note on it. Import test can be a JVM test of the mapper: a fake provider row becomes a contact, a second import updates the name without dropping a note, a second import of the same number keeps the same phone row id, an import whose key sits on a joined contact updates the survivor and creates no contact, an import does not remove a number another phone added, and two phones that spell a name differently do not overwrite each other on repeated imports. The on-device check is the import, the manual note, the tag, and the reminder notification. Two devices or emulators that hold the same contact and share a folder show that person as one contact after a sync.
 
 ### Phase 4 — After-call prompt
 
-The listener, the Lynx notification, and the composer entry. Unit tests from phase 1 still cover the decision. On a device, place a call with the stock dialer, hang up, and confirm the notification. Tap Add note and save. Tap Not now on a second call and confirm no new note exists. This phase is done only after that device check.
+The listener, the Lynx notification, and the composer entry, including **This is the same person** for an unmatched number. Unit tests from phase 1 still cover the decision. On a device, place a call with the stock dialer, hang up, and confirm the notification. Tap Add note and save. Tap Not now on a second call and confirm no new note exists. This phase is done only after that device check.
 
 ### Phase 5 — Pass over the empty states, the prefix and merge explanation, and the setup copy
 
@@ -545,3 +585,4 @@ v1 is done when a person can:
 - Dismiss a second prompt and find no trace of that call in the database.
 - On Android, have a due reminder post a notification.
 - Edit the same note on both devices and, after the merge, see the edit that was saved later. Add a different note on each device and see both notes survive.
+- Use a second Android phone on the same library and see a person held on both phones as one contact.
