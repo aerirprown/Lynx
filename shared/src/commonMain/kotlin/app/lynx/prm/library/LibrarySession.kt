@@ -76,7 +76,7 @@ class LibrarySession(
                 Merger.mergePeer(database!!, peer.db)
             }
         }
-        Merger.collapseTags(database!!, clock.epochMs(), deviceId)
+        tidyAfterMerge()
 
         val own = valid.find { it.name == fileName }
         if (own != null && own.deviceId != null && own.deviceId != deviceId) {
@@ -115,13 +115,19 @@ class LibrarySession(
                 Merger.mergePeer(database!!, peer.db)
             }
         }
-        Merger.collapseTags(database!!, clock.epochMs(), deviceId)
+        tidyAfterMerge()
         val own = valid.find { it.name == fileName }
         if (own != null && own.deviceId != null && own.deviceId != deviceId) {
             return OpenResult.PrefixInUse(fileName, suggestedPrefix(prefix, deviceId))
         }
         if (publishOwnFile) publishWork()
         return OpenResult.Ready(chosen, emptyList())
+    }
+
+    private fun tidyAfterMerge() {
+        val now = clock.epochMs()
+        Merger.joinContacts(database!!, now, deviceId)
+        Merger.collapseTags(database!!, now, deviceId)
     }
 
     private fun openWork() {

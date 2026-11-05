@@ -1,5 +1,6 @@
 package app.lynx.prm
 
+import app.lynx.prm.contacts.ImportRecord
 import app.lynx.prm.contacts.LabeledValue
 import app.lynx.prm.contacts.ProviderContact
 import app.lynx.prm.contacts.toImport
@@ -36,7 +37,8 @@ class Phase3Test {
             phones = listOf(LabeledValue("(650) 253-0000", "mobile")),
             emails = emptyList(),
         ).toImport()!!
-        store.importContacts(listOf(first))
+        val record = ImportRecord()
+        store.importContacts(listOf(first), record)
         val contactId = store.listContacts().single().id
         val phoneId = store.phones(contactId).single().id
         store.addNote(contactId, "met at the office")
@@ -49,7 +51,7 @@ class Phase3Test {
             phones = listOf(LabeledValue("+1 650-253-0000", "work")),
             emails = listOf(LabeledValue("dana@acme.test", "work")),
         ).toImport()!!
-        store.importContacts(listOf(second))
+        store.importContacts(listOf(second), record)
 
         assertEquals(phoneId, store.phones(contactId).single().id)
         assertEquals("work", store.phones(contactId).single().label)

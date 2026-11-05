@@ -1,5 +1,8 @@
 package app.lynx.prm.store
 
+import app.lynx.prm.contacts.ImportRecord
+import app.lynx.prm.contacts.SeenContact
+import app.lynx.prm.contacts.SeenValue
 import app.lynx.prm.db.Clock
 import app.lynx.prm.library.Merger
 import app.lynx.prm.db.Ids
@@ -40,6 +43,7 @@ class LynxStore(
             jobTitle = jobTitle?.trim()?.ifEmpty { null },
             kind = kind,
             androidLookupKey = null,
+            mergedInto = null,
             createdAt = now,
             updatedAt = now,
             updatedBy = deviceId,
@@ -60,6 +64,7 @@ class LynxStore(
             jobTitle = current.job_title,
             kind = current.kind,
             androidLookupKey = current.android_lookup_key,
+            mergedInto = current.merged_into,
             createdAt = current.created_at,
             updatedAt = now,
             updatedBy = deviceId,
@@ -68,6 +73,16 @@ class LynxStore(
     }
 
     fun contact(id: String): Contact? = db.lynxQueries.selectContact(id).executeAsOneOrNull()?.toModel()
+
+    /** The contact this id ended up as, which differs from the id once it has been joined. */
+    fun resolveContactId(id: String): String = Merger.endOfChain(db, id)
+
+    /** "This is the same person". Returns the id of the contact that remains. */
+    fun joinContacts(firstId: String, secondId: String): String {
+        require(firstId != secondId) { "Choose a different contact." }
+        val group = listOf(firstId, secondId).map { db.lynxQueries.selectContact(it).executeAsOne() }
+        return db.transactionWithResult { Merger.joinGroup(db, group, clock.epochMs(), deviceId) }
+    }
 
     fun listContacts(): List<Contact> {
         val notes = db.lynxQueries.selectAllNotes().executeAsList().filter { it.deleted_at == null }
@@ -120,6 +135,7 @@ class LynxStore(
             jobTitle = jobTitle?.trim()?.ifEmpty { null },
             kind = kind,
             androidLookupKey = current.android_lookup_key,
+            mergedInto = current.merged_into,
             createdAt = current.created_at,
             updatedAt = now,
             updatedBy = deviceId,
@@ -129,44 +145,159 @@ class LynxStore(
         syncEmails(id, emails, now)
     }
 
-    fun importContacts(rows: List<ContactImport>) {
-        for (row in rows) {
-            if (row.displayName.isBlank() && row.phones.isEmpty()) continue
-            val existing = db.lynxQueries.selectContactByLookup(row.lookupKey).executeAsOneOrNull()
-            val now = clock.epochMs()
-            val contactId = if (existing == null) {
-                val id = ids.newId()
-                db.lynxQueries.upsertContact(
-                    id = id,
-                    displayName = row.displayName.trim().ifEmpty { row.phones.first().raw },
-                    organization = row.organization,
-                    jobTitle = row.jobTitle,
-                    kind = "unspecified",
-                    androidLookupKey = row.lookupKey,
-                    createdAt = now,
-                    updatedAt = now,
-                    updatedBy = deviceId,
-                    deletedAt = null,
-                )
-                id
-            } else {
-                db.lynxQueries.upsertContact(
-                    id = existing.id,
-                    displayName = row.displayName.trim().ifEmpty { existing.display_name },
-                    organization = row.organization,
-                    jobTitle = row.jobTitle,
-                    kind = existing.kind,
-                    androidLookupKey = existing.android_lookup_key,
-                    createdAt = existing.created_at,
-                    updatedAt = now,
-                    updatedBy = deviceId,
-                    deletedAt = existing.deleted_at,
-                )
-                existing.id
+    /** Writes only what changed on this phone since its last import, and updates [record] to match. */
+    fun importContacts(rows: List<ContactImport>, record: ImportRecord) {
+        db.transaction {
+            for (row in rows) {
+                if (row.displayName.isBlank() && row.phones.isEmpty()) continue
+                val seen = row.toSeen()
+                val existing = contactForLookup(row.lookupKey)
+                val previous = record[row.lookupKey].takeIf { existing != null }
+                if (previous == seen) continue
+                val now = clock.epochMs()
+                val contactId = when (existing) {
+                    null -> createImported(row, now)
+                    else -> updateImported(existing, seen, previous, now)
+                }
+                importPhones(contactId, row.phones, previous, now)
+                importEmails(contactId, row.emails, previous, now)
+                record[row.lookupKey] = seen
             }
-            syncPhones(contactId, row.phones, now)
-            syncEmails(contactId, row.emails, now)
         }
+    }
+
+    private fun ContactImport.toSeen() = SeenContact(
+        displayName = ImportRecord.clean(displayName.trim()),
+        organization = organization?.let(ImportRecord::clean)?.ifEmpty { null },
+        jobTitle = jobTitle?.let(ImportRecord::clean)?.ifEmpty { null },
+        phones = phones.map { SeenValue(ImportRecord.clean(it.raw), it.label?.let(ImportRecord::clean)?.ifEmpty { null }) },
+        emails = emails.map { SeenValue(ImportRecord.clean(it.address), it.label?.let(ImportRecord::clean)?.ifEmpty { null }) },
+    )
+
+    /** Finds the row for a key, following a joined contact to its survivor. */
+    private fun contactForLookup(lookupKey: String): ContactRow? {
+        return db.lynxQueries.selectContactsByLookup(lookupKey).executeAsList()
+            .mapNotNull { db.lynxQueries.selectContact(Merger.endOfChain(db, it.id)).executeAsOneOrNull() }
+            .minWithOrNull(compareBy<ContactRow> { it.deleted_at != null }.thenBy { it.created_at }.thenBy { it.id })
+    }
+
+    private fun createImported(row: ContactImport, now: Long): String {
+        val id = ids.newId()
+        db.lynxQueries.upsertContact(
+            id = id,
+            displayName = row.displayName.trim().ifEmpty { row.phones.first().raw },
+            organization = row.organization,
+            jobTitle = row.jobTitle,
+            kind = "unspecified",
+            androidLookupKey = row.lookupKey,
+            mergedInto = null,
+            createdAt = now,
+            updatedAt = now,
+            updatedBy = deviceId,
+            deletedAt = null,
+        )
+        return id
+    }
+
+    /**
+     * With no record this phone is seeing the person for the first time, and nothing has
+     * changed here, so it only fills in what the library doesn't have.
+     */
+    private fun updateImported(existing: ContactRow, seen: SeenContact, previous: SeenContact?, now: Long): String {
+        val name = when {
+            previous == null || previous.displayName == seen.displayName -> existing.display_name
+            else -> seen.displayName.ifEmpty { existing.display_name }
+        }
+        val organization = when {
+            previous == null -> existing.organization ?: seen.organization
+            previous.organization == seen.organization -> existing.organization
+            else -> seen.organization
+        }
+        val jobTitle = when {
+            previous == null -> existing.job_title ?: seen.jobTitle
+            previous.jobTitle == seen.jobTitle -> existing.job_title
+            else -> seen.jobTitle
+        }
+        if (name != existing.display_name || organization != existing.organization || jobTitle != existing.job_title) {
+            db.lynxQueries.upsertContact(
+                id = existing.id,
+                displayName = name,
+                organization = organization,
+                jobTitle = jobTitle,
+                kind = existing.kind,
+                androidLookupKey = existing.android_lookup_key,
+                mergedInto = existing.merged_into,
+                createdAt = existing.created_at,
+                updatedAt = now,
+                updatedBy = deviceId,
+                deletedAt = existing.deleted_at,
+            )
+        }
+        return existing.id
+    }
+
+    private fun importPhones(contactId: String, imports: List<PhoneImport>, previous: SeenContact?, now: Long) {
+        val existing = db.lynxQueries.selectPhonesForContact(contactId).executeAsList()
+            .sortedBy { it.deleted_at != null }
+        val normalizedNow = imports.map { PhoneNumbers.normalize(it.raw, defaultRegion) }
+        val taken = mutableSetOf<String>()
+        for ((imported, normalized) in imports.zip(normalizedNow)) {
+            val row = existing.firstOrNull { it.id !in taken && PhoneNumbers.matches(it.normalized, normalized) }
+            if (row == null) {
+                insertPhone(contactId, imported, now)
+                continue
+            }
+            taken += row.id
+            val before = previous?.phones?.firstOrNull {
+                PhoneNumbers.matches(PhoneNumbers.normalize(it.value, defaultRegion), normalized)
+            }
+            val unchangedHere = before != null && before.value == imported.raw && before.label == imported.label
+            val firstSight = previous == null && row.deleted_at == null
+            if (!unchangedHere && !firstSight) {
+                db.lynxQueries.upsertPhone(
+                    row.id, row.contact_id, imported.raw, normalized, imported.label,
+                    row.created_at, now, deviceId, null,
+                )
+            }
+        }
+        previous?.phones.orEmpty()
+            .map { PhoneNumbers.normalize(it.value, defaultRegion) }
+            .filter { gone -> normalizedNow.none { PhoneNumbers.matches(gone, it) } }
+            .forEach { gone ->
+                existing.filter { it.deleted_at == null && PhoneNumbers.matches(it.normalized, gone) }
+                    .forEach { db.lynxQueries.softDeletePhone(now, deviceId, it.id) }
+            }
+    }
+
+    private fun importEmails(contactId: String, imports: List<EmailImport>, previous: SeenContact?, now: Long) {
+        val existing = db.lynxQueries.selectEmailsForContact(contactId).executeAsList()
+            .sortedBy { it.deleted_at != null }
+        val addressesNow = imports.map { it.address.trim().foldCase() }
+        val taken = mutableSetOf<String>()
+        for ((imported, address) in imports.zip(addressesNow)) {
+            val row = existing.firstOrNull { it.id !in taken && it.address.trim().foldCase() == address }
+            if (row == null) {
+                insertEmail(contactId, imported, now)
+                continue
+            }
+            taken += row.id
+            val before = previous?.emails?.firstOrNull { it.value.trim().foldCase() == address }
+            val unchangedHere = before != null && before.value == imported.address && before.label == imported.label
+            val firstSight = previous == null && row.deleted_at == null
+            if (!unchangedHere && !firstSight) {
+                db.lynxQueries.upsertEmail(
+                    row.id, row.contact_id, imported.address.trim(), imported.label,
+                    row.created_at, now, deviceId, null,
+                )
+            }
+        }
+        previous?.emails.orEmpty()
+            .map { it.value.trim().foldCase() }
+            .filter { it !in addressesNow }
+            .forEach { gone ->
+                existing.filter { it.deleted_at == null && it.address.trim().foldCase() == gone }
+                    .forEach { db.lynxQueries.softDeleteEmail(now, deviceId, it.id) }
+            }
     }
 
     fun addNote(

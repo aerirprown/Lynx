@@ -10,6 +10,7 @@ CREATE TABLE contact (
   job_title TEXT,
   kind TEXT NOT NULL DEFAULT 'unspecified',
   android_lookup_key TEXT,
+  merged_into TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL,
@@ -93,7 +94,7 @@ CREATE INDEX note_contact_occurred ON note(contact_id, occurred_at);
 CREATE INDEX contact_tag_contact ON contact_tag(contact_id);
 CREATE INDEX contact_tag_tag ON contact_tag(tag_id);
 CREATE INDEX reminder_open_due ON reminder(done_at, due_at);
-CREATE UNIQUE INDEX contact_lookup ON contact(android_lookup_key);
+CREATE INDEX contact_lookup ON contact(android_lookup_key);
 
 upsertMeta:
 INSERT INTO meta(key, value)
@@ -105,10 +106,10 @@ SELECT value FROM meta WHERE key = :key;
 
 upsertContact:
 INSERT INTO contact(
-  id, display_name, organization, job_title, kind, android_lookup_key,
+  id, display_name, organization, job_title, kind, android_lookup_key, merged_into,
   created_at, updated_at, updated_by, deleted_at
 ) VALUES (
-  :id, :displayName, :organization, :jobTitle, :kind, :androidLookupKey,
+  :id, :displayName, :organization, :jobTitle, :kind, :androidLookupKey, :mergedInto,
   :createdAt, :updatedAt, :updatedBy, :deletedAt
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -117,6 +118,7 @@ ON CONFLICT(id) DO UPDATE SET
   job_title = excluded.job_title,
   kind = excluded.kind,
   android_lookup_key = excluded.android_lookup_key,
+  merged_into = excluded.merged_into,
   created_at = excluded.created_at,
   updated_at = excluded.updated_at,
   updated_by = excluded.updated_by,
@@ -128,8 +130,13 @@ SELECT * FROM contact;
 selectContact:
 SELECT * FROM contact WHERE id = :id;
 
-selectContactByLookup:
+selectContactsByLookup:
 SELECT * FROM contact WHERE android_lookup_key = :lookupKey;
+
+markContactJoined:
+UPDATE contact
+SET merged_into = :survivorId, deleted_at = :now, updated_at = :now, updated_by = :updatedBy
+WHERE id = :id;
 
 upsertPhone:
 INSERT INTO phone(
@@ -173,6 +180,35 @@ SELECT * FROM email;
 
 selectEmailsForContact:
 SELECT * FROM email WHERE contact_id = :contactId;
+
+movePhones:
+UPDATE phone SET contact_id = :toContact, updated_at = :now, updated_by = :updatedBy
+WHERE contact_id = :fromContact AND deleted_at IS NULL;
+
+moveEmails:
+UPDATE email SET contact_id = :toContact, updated_at = :now, updated_by = :updatedBy
+WHERE contact_id = :fromContact AND deleted_at IS NULL;
+
+moveNotes:
+UPDATE note SET contact_id = :toContact, updated_at = :now, updated_by = :updatedBy
+WHERE contact_id = :fromContact AND deleted_at IS NULL;
+
+moveContactTags:
+UPDATE contact_tag SET contact_id = :toContact, updated_at = :now, updated_by = :updatedBy
+WHERE contact_id = :fromContact AND deleted_at IS NULL;
+
+moveReminders:
+UPDATE reminder SET contact_id = :toContact, updated_at = :now, updated_by = :updatedBy
+WHERE contact_id = :fromContact AND deleted_at IS NULL;
+
+softDeletePhone:
+UPDATE phone SET deleted_at = :now, updated_at = :now, updated_by = :updatedBy WHERE id = :id;
+
+softDeleteEmail:
+UPDATE email SET deleted_at = :now, updated_at = :now, updated_by = :updatedBy WHERE id = :id;
+
+softDeleteContactTag:
+UPDATE contact_tag SET deleted_at = :now, updated_at = :now, updated_by = :updatedBy WHERE id = :id;
 
 upsertNote:
 INSERT INTO note(

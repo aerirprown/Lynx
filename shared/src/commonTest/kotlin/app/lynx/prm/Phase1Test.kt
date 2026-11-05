@@ -1,5 +1,6 @@
 package app.lynx.prm
 
+import app.lynx.prm.contacts.ImportRecord
 import app.lynx.prm.db.MutableClock
 import app.lynx.prm.db.UuidIds
 import app.lynx.prm.library.LibrarySession
@@ -309,6 +310,7 @@ class LibraryTest {
         val session = session(folder, "bob", "device-bob", MutableClock(100))
         session.open()
         val store = session.store()
+        val record = ImportRecord()
         store.importContacts(
             listOf(
                 ContactImport(
@@ -317,6 +319,7 @@ class LibraryTest {
                     phones = listOf(PhoneImport("(650) 253-0000", "mobile")),
                 ),
             ),
+            record,
         )
         val contactId = store.listContacts().single().id
         val phoneId = store.phones(contactId).single().id
@@ -329,6 +332,7 @@ class LibraryTest {
                     phones = listOf(PhoneImport("+1 650-253-0000", "work")),
                 ),
             ),
+            record,
         )
         assertEquals(phoneId, store.phones(contactId).single().id)
         assertEquals("work", store.phones(contactId).single().label)

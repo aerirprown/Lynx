@@ -53,6 +53,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 private val gap = 12.dp
+private const val MAX_JOIN_CHOICES = 20
 
 @Composable
 fun LynxApp(model: LynxModel) {
@@ -156,7 +157,7 @@ private fun SetupScreen(model: LynxModel) {
         Text("Lynx", color = LynxTextStrong, style = MaterialTheme.typography.headlineMedium)
         val device = if (model.phoneAccess == null) "computer" else "phone"
         Text(
-            "Choose the folder where this $device keeps its Lynx file. Each device writes its own file there. Opening Lynx, leaving it, or Sync now pulls in everyone else's file. Two edits of the same note keep the edit that was saved later.",
+            "Choose the folder where this $device keeps its Lynx file. Each device writes its own file there. Opening Lynx, leaving it, or Sync now pulls in everyone else's file. Two edits of the same note keep the edit that was saved later. A person held on two phones becomes one contact.",
             color = LynxText,
         )
         Text(model.folder?.let { folderLabel(it) } ?: "No folder chosen yet.", color = LynxTextMuted)
@@ -248,7 +249,18 @@ private fun ContactList(model: LynxModel, modifier: Modifier, showAdd: Boolean) 
                     )
                 }
                 if (!access.notificationsGranted) {
-                    Text("Reminder notifications are off.", color = LynxTextMuted, modifier = Modifier.padding(top = 4.dp))
+                    Text(
+                        "Notifications are off, so Lynx can't post reminders or call prompts.",
+                        color = LynxTextMuted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                if (!access.notificationAccessGranted) {
+                    Text(
+                        "Call detection is off. You can still add notes by hand.",
+                        color = LynxTextMuted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
             model.skipped.forEach { skipped ->
@@ -430,8 +442,9 @@ private fun ContactScreen(model: LynxModel, id: String, showBack: Boolean, modif
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SecondaryButton("Edit contact") { model.editor = Editor.ContactEditor(id) }
+            SecondaryButton("This is the same person") { model.editor = Editor.JoinContact(id) }
             TextButton(onClick = { model.editor = Editor.DeleteContact(id, contact.displayName) }) {
                 Text("Delete", color = LynxRed)
             }
@@ -460,7 +473,7 @@ private fun SettingsScreen(model: LynxModel, modifier: Modifier) {
         verticalArrangement = Arrangement.spacedBy(gap),
     ) {
         Text(
-            "Each device has its own file. Opening Lynx, leaving it, or Sync now pulls in the other files. Two edits of the same note keep the edit that was saved later.",
+            "Each device has its own file. Opening Lynx, leaving it, or Sync now pulls in the other files. Two edits of the same note keep the edit that was saved later. A person held on two phones becomes one contact.",
             color = LynxText,
         )
         Text("Folder", color = LynxTextStrong)
@@ -491,10 +504,17 @@ private fun SettingsScreen(model: LynxModel, modifier: Modifier) {
             )
             if (!access.contactsGranted) SecondaryButton("Allow contacts") { access.requestContacts() }
             Text(
-                if (access.notificationsGranted) "Reminder notifications are on." else "Reminder notifications are off.",
+                if (access.notificationsGranted) "Notifications are on." else "Notifications are off, so Lynx can't post reminders or call prompts.",
                 color = LynxTextMuted,
             )
             if (!access.notificationsGranted) SecondaryButton("Allow notifications") { access.requestNotifications() }
+            Text(
+                if (access.notificationAccessGranted) "Notification access is on." else "Notification access is off, so call detection is off.",
+                color = LynxTextMuted,
+            )
+            if (!access.notificationAccessGranted) {
+                SecondaryButton("Turn on notification access") { access.openNotificationAccess() }
+            }
         }
     }
 }
@@ -512,10 +532,20 @@ private fun PermissionSetup(access: PhoneAccess) {
         }
     }
     if (!access.notificationsGranted && !access.notificationsSkipped) {
-        Text("Due reminders can post a notification. Lynx does not schedule alarms.", color = LynxText)
+        Text("Lynx uses notifications for due reminders and to ask about a call that just ended.", color = LynxText)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PrimaryButton("Allow notifications") { access.requestNotifications() }
             SecondaryButton("Skip") { access.notificationsSkipped = true }
+        }
+    }
+    if (!access.notificationAccessGranted && !access.notificationAccessSkipped) {
+        Text(
+            "Lynx reads the caller name or number on the phone app's call notification, and ignores every other notification.",
+            color = LynxText,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton("Turn on notification access") { access.openNotificationAccess() }
+            SecondaryButton("Skip") { access.notificationAccessSkipped = true }
         }
     }
 }
@@ -552,7 +582,54 @@ private fun EditorHost(model: LynxModel, editor: Editor) {
             onConfirm = { model.deleteContact(editor.id) },
             onCancel = { model.editor = null },
         )
+        is Editor.DeleteNote -> ConfirmDialog(
+            title = "Delete this note?",
+            body = "It leaves this contact on every device.",
+            confirm = "Delete",
+            onConfirm = { model.deleteNote(editor.noteId) },
+            onCancel = { model.editor = Editor.NoteEditor(editor.contactId, editor.noteId) },
+        )
+        is Editor.JoinContact -> JoinDialog(model, editor.id)
         is Editor.PrefixClash -> PrefixClashDialog(model, editor.fileName, editor.suggestion)
+    }
+}
+
+@Composable
+private fun JoinDialog(model: LynxModel, id: String) {
+    var term by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf<Contact?>(null) }
+    val name = model.contactName(id)
+    val other = chosen
+    if (other != null) {
+        ConfirmDialog(
+            title = "Join $name and ${other.displayName}?",
+            body = "Their notes, tags, and reminders move to one contact. This can't be undone.",
+            confirm = "Join",
+            onConfirm = { model.joinContacts(id, other.id) },
+            onCancel = { chosen = null },
+        )
+        return
+    }
+    Dialog(onDismissRequest = { model.editor = null }) {
+        Surface(color = LynxRaised, shape = RoundedCornerShape(12.dp)) {
+            Column(
+                Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("This is the same person", color = LynxTextStrong, style = MaterialTheme.typography.titleLarge)
+                Text("Choose the contact that is also $name.", color = LynxTextMuted)
+                LynxField(term, { term = it }, "Search", "Name, number, or note")
+                val candidates = model.joinCandidates(id, term)
+                if (candidates.isEmpty()) Text("No other contacts match.", color = LynxTextMuted)
+                candidates.take(MAX_JOIN_CHOICES).forEach { candidate ->
+                    Column(Modifier.fillMaxWidth().clickable { chosen = candidate }.padding(vertical = 8.dp)) {
+                        Text(candidate.displayName, color = LynxText, fontWeight = FontWeight.Medium)
+                        candidate.organization?.let { Text(it, color = LynxTextMuted) }
+                    }
+                }
+                SecondaryButton("Cancel") { model.editor = null }
+            }
+        }
     }
 }
 
@@ -669,6 +746,11 @@ private fun NoteEditor(model: LynxModel, contactId: String, noteId: String?) {
                             error = "Use a date like 2026-11-05 14:30."
                         } else {
                             model.saveNote(contactId, noteId, body, occurred, reminder, due)
+                        }
+                    }
+                    if (noteId != null) {
+                        TextButton(onClick = { model.editor = Editor.DeleteNote(contactId, noteId) }) {
+                            Text("Delete", color = LynxRed)
                         }
                     }
                     SecondaryButton("Cancel") { model.editor = null }

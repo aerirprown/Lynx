@@ -5,9 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import app.lynx.prm.ui.LynxApp
@@ -45,8 +47,10 @@ class MainActivity : ComponentActivity() {
             model.phoneAccess = PhoneAccess(
                 contactsGranted = permissionGranted(Manifest.permission.READ_CONTACTS),
                 notificationsGranted = notificationsGranted(),
+                notificationAccessGranted = notificationAccessGranted(),
                 requestContacts = { app.activity?.requestContacts() },
                 requestNotifications = { app.activity?.requestNotifications() },
+                openNotificationAccess = { app.activity?.openNotificationAccess() },
             )
         }
         app.startOnce()
@@ -67,6 +71,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         model.phoneAccess?.contactsGranted = permissionGranted(Manifest.permission.READ_CONTACTS)
         model.phoneAccess?.notificationsGranted = notificationsGranted()
+        model.phoneAccess?.notificationAccessGranted = notificationAccessGranted()
         importContacts()
     }
 
@@ -103,6 +108,14 @@ class MainActivity : ComponentActivity() {
         } else {
             model.phoneAccess?.notificationsGranted = true
         }
+    }
+
+    private fun openNotificationAccess() {
+        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+    }
+
+    private fun notificationAccessGranted(): Boolean {
+        return packageName in NotificationManagerCompat.getEnabledListenerPackages(this)
     }
 
     private fun permissionGranted(permission: String): Boolean {

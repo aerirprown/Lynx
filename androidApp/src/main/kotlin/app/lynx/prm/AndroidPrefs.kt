@@ -52,6 +52,14 @@ class AndroidPrefs(context: Context) : InstallPrefs {
         get() = preferences.getString(KEY_REGION, null)?.takeIf { it.isNotBlank() } ?: defaultRegion()
         set(value) = put(KEY_REGION, value.ifBlank { defaultRegion() })
 
+    override var importRecord: String?
+        get() = recordFile.takeIf { it.exists() }?.readText()
+        set(value) {
+            if (value == null) recordFile.delete() else recordFile.writeText(value)
+        }
+
+    private val recordFile: File get() = File(appContext.filesDir, "import_record.txt")
+
     private fun put(key: String, value: String?) {
         val editor = preferences.edit()
         if (value.isNullOrBlank()) editor.remove(key) else editor.putString(key, value)

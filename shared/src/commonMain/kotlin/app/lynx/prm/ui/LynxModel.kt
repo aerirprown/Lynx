@@ -3,6 +3,7 @@ package app.lynx.prm.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import app.lynx.prm.contacts.ImportRecord
 import app.lynx.prm.db.Clock
 import app.lynx.prm.db.Ids
 import app.lynx.prm.db.UuidIds
@@ -30,6 +31,11 @@ interface InstallPrefs {
     var prefix: String
     var libraryId: String?
     var phoneRegion: String
+
+    /** The private import record. Only Android imports contacts, so desktop keeps none. */
+    var importRecord: String?
+        get() = null
+        set(_) = Unit
 }
 
 fun interface FolderPicker {
@@ -48,6 +54,8 @@ sealed interface Editor {
     data class NoteEditor(val contactId: String, val noteId: String?) : Editor
     data class ReminderEditor(val contactId: String, val reminderId: String?) : Editor
     data class DeleteContact(val id: String, val name: String) : Editor
+    data class DeleteNote(val contactId: String, val noteId: String) : Editor
+    data class JoinContact(val id: String) : Editor
     data class PrefixClash(val fileName: String, val suggestion: String) : Editor
 }
 
@@ -58,13 +66,17 @@ class WallClock : Clock {
 class PhoneAccess(
     contactsGranted: Boolean,
     notificationsGranted: Boolean,
+    notificationAccessGranted: Boolean,
     val requestContacts: () -> Unit,
     val requestNotifications: () -> Unit,
+    val openNotificationAccess: () -> Unit,
 ) {
     var contactsGranted by mutableStateOf(contactsGranted)
     var notificationsGranted by mutableStateOf(notificationsGranted)
+    var notificationAccessGranted by mutableStateOf(notificationAccessGranted)
     var contactsSkipped by mutableStateOf(false)
     var notificationsSkipped by mutableStateOf(false)
+    var notificationAccessSkipped by mutableStateOf(false)
 }
 
 class LynxModel(
@@ -126,11 +138,14 @@ class LynxModel(
 
     fun importDeviceContacts(rows: List<ContactImport>) {
         if (rows.isEmpty() || session == null) return
-        edit { store()?.importContacts(rows) }
+        val record = ImportRecord.decode(prefs.importRecord)
+        edit { store()?.importContacts(rows, record) }
+        prefs.importRecord = record.encode()
     }
 
     fun openFromNotification(id: String) {
-        if (session == null) pendingPerson = id else place = Place.Person(id)
+        val store = store()
+        if (store == null) pendingPerson = id else place = Place.Person(store.resolveContactId(id))
     }
 
     fun switchFolder(path: String) {
@@ -293,6 +308,23 @@ class LynxModel(
             editor = null
         }
 
+    fun deleteNote(noteId: String) = edit {
+        store()?.deleteNote(noteId)
+        editor = null
+    }
+
+    /** Other contacts that could be the same person as this one, for "This is the same person". */
+    fun joinCandidates(id: String, term: String): List<Contact> {
+        val store = liveStore() ?: return emptyList()
+        return store.search(term.trim()).filter { it.id != id }
+    }
+
+    fun joinContacts(id: String, otherId: String) = edit {
+        val survivor = store()?.joinContacts(id, otherId) ?: return@edit
+        editor = null
+        place = Place.Person(survivor)
+    }
+
     fun saveReminder(contactId: String, reminderId: String?, body: String, dueAt: Long) = edit {
         val store = store() ?: return@edit
         if (reminderId == null) store.addReminder(contactId, body, dueAt) else store.updateReminder(reminderId, body, dueAt)
@@ -351,7 +383,7 @@ class LynxModel(
                 blockedMessage = null
                 editor = null
                 reload()
-                val pending = pendingPerson
+                val pending = pendingPerson?.let { store()?.resolveContactId(it) }
                 if (pending != null && store()?.contact(pending) != null) {
                     pendingPerson = null
                     place = Place.Person(pending)

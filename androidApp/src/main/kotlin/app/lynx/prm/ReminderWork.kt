@@ -19,35 +19,44 @@ import androidx.work.WorkerParameters
 import app.lynx.prm.store.Reminder
 import java.util.concurrent.TimeUnit
 
-class ReminderScheduler(private val context: Context) {
+/**
+ * Keeps WorkManager in step with the open reminders. What was scheduled is saved on disk,
+ * because scheduled work outlives the process: a reminder done on another device has to
+ * be cancelled here even after a restart.
+ */
+class ReminderScheduler(context: Context) {
+    private val appContext = context.applicationContext
+    private val scheduled = appContext.getSharedPreferences("lynx_reminders", Context.MODE_PRIVATE)
+
     fun sync(reminders: List<Reminder>, contactName: (String) -> String) {
-        val manager = WorkManager.getInstance(context)
-        val wanted = reminders.map { it.id }.toSet()
-        val previous = signatures.keys.toSet()
-        for (id in previous - wanted) {
+        val manager = WorkManager.getInstance(appContext)
+        val changes = scheduled.edit()
+        for (id in scheduled.all.keys - reminders.map { it.id }.toSet()) {
             manager.cancelUniqueWork(workName(id))
-            signatures.remove(id)
+            changes.remove(id)
         }
         for (reminder in reminders) {
-            val signature = "${reminder.dueAt}:${reminder.body}:${contactName(reminder.contactId)}"
-            if (signatures[reminder.id] == signature) continue
+            val title = contactName(reminder.contactId)
+            val signature = "${reminder.dueAt}:${reminder.contactId}:${reminder.body}:$title"
+            if (scheduled.getString(reminder.id, null) == signature) continue
             val delay = (reminder.dueAt - System.currentTimeMillis()).coerceAtLeast(0L)
             val data = Data.Builder()
-                .putString(ReminderWorker.TITLE, contactName(reminder.contactId))
+                .putString(ReminderWorker.TITLE, title)
                 .putString(ReminderWorker.BODY, reminder.body)
                 .putString(ReminderWorker.CONTACT, reminder.contactId)
+                .putString(ReminderWorker.REMINDER, reminder.id)
                 .build()
             val request = OneTimeWorkRequestBuilder<ReminderWorker>()
                 .setInitialDelay(delay, TimeUnit.MILLISECONDS)
                 .setInputData(data)
                 .build()
             manager.enqueueUniqueWork(workName(reminder.id), ExistingWorkPolicy.REPLACE, request)
-            signatures[reminder.id] = signature
+            changes.putString(reminder.id, signature)
         }
+        changes.apply()
     }
 
     private companion object {
-        val signatures = HashMap<String, String>()
         fun workName(id: String) = "lynx-reminder-$id"
     }
 }
@@ -57,6 +66,7 @@ class ReminderWorker(context: Context, params: WorkerParameters) : Worker(contex
         val title = inputData.getString(TITLE) ?: return Result.success()
         val body = inputData.getString(BODY) ?: return Result.success()
         val contactId = inputData.getString(CONTACT) ?: return Result.success()
+        val reminderId = inputData.getString(REMINDER) ?: return Result.success()
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -74,7 +84,7 @@ class ReminderWorker(context: Context, params: WorkerParameters) : Worker(contex
         }
         val pending = PendingIntent.getActivity(
             applicationContext,
-            contactId.hashCode(),
+            reminderId.hashCode(),
             open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -85,7 +95,7 @@ class ReminderWorker(context: Context, params: WorkerParameters) : Worker(contex
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
-        NotificationManagerCompat.from(applicationContext).notify(contactId.hashCode(), notification)
+        NotificationManagerCompat.from(applicationContext).notify(reminderId.hashCode(), notification)
         return Result.success()
     }
 
@@ -93,5 +103,6 @@ class ReminderWorker(context: Context, params: WorkerParameters) : Worker(contex
         const val TITLE = "title"
         const val BODY = "body"
         const val CONTACT = "contactId"
+        const val REMINDER = "reminderId"
     }
 }

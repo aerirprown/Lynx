@@ -81,6 +81,66 @@ class Phase2Test {
     }
 
     @Test
+    fun joiningByHandLeavesOneContactWithBothSetsOfNotes() {
+        val files = platformFiles()
+        val prefs = MemoryPrefs("device-a", "Bob", files.tempDirectory(), "bob")
+        val model = LynxModel(prefs, FolderPicker { null }, files, MutableClock(10_000), UuidIds())
+        model.start()
+        model.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        val first = assertIs<Place.Person>(model.place).id
+        model.saveNote(first, null, "First", 10_000, "", null)
+        model.saveContact(null, "Dana Shah", "", "", "personal", emptyList(), emptyList())
+        val second = assertIs<Place.Person>(model.place).id
+        model.saveNote(second, null, "Second", 10_000, "", null)
+
+        assertEquals(listOf(second), model.joinCandidates(first, "Shah").map { it.id })
+        model.joinContacts(first, second)
+
+        val survivor = assertIs<Place.Person>(model.place).id
+        assertEquals(1, model.contacts.size)
+        assertEquals(setOf("First", "Second"), model.notes(survivor).map { it.body }.toSet())
+        model.shutdown()
+    }
+
+    @Test
+    fun deletingANoteRemovesItFromTheContact() {
+        val files = platformFiles()
+        val prefs = MemoryPrefs("device-a", "Bob", files.tempDirectory(), "bob")
+        val model = LynxModel(prefs, FolderPicker { null }, files, MutableClock(10_000), UuidIds())
+        model.start()
+        model.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        val id = assertIs<Place.Person>(model.place).id
+        model.saveNote(id, null, "Delete me", 10_000, "", null)
+
+        model.deleteNote(model.notes(id).single().id)
+
+        assertEquals(emptyList(), model.notes(id))
+        model.shutdown()
+    }
+
+    @Test
+    fun aFileFromBeforeContactJoiningStillMerges() {
+        val files = platformFiles()
+        val folder = files.tempDirectory()
+        val clock = MutableClock(10_000)
+        val writer = LynxModel(MemoryPrefs("old-device", "Old", folder, "old"), FolderPicker { null }, files, clock, UuidIds())
+        writer.start()
+        writer.saveContact(null, "Dana", "", "", "personal", emptyList(), emptyList())
+        writer.shutdown()
+
+        val path = files.child(folder, "old_lynx.sqlite")
+        val driver = files.openPeerDriver(path)
+        driver.execute(null, "ALTER TABLE contact DROP COLUMN merged_into", 0, null).value
+        driver.close()
+
+        val reader = LynxModel(MemoryPrefs("new-device", "New", folder, "new"), FolderPicker { null }, files, clock, UuidIds())
+        reader.start()
+        assertEquals(listOf("Dana"), reader.contacts.map { it.displayName })
+        assertEquals(emptyList(), reader.skipped)
+        reader.shutdown()
+    }
+
+    @Test
     fun twoPrefixesInOneFolderMergeBothNotes() {
         val files = platformFiles()
         val folder = files.tempDirectory()
@@ -118,4 +178,5 @@ private class MemoryPrefs(
     override var prefix: String = prefix
     override var libraryId: String? = null
     override var phoneRegion: String = "US"
+    override var importRecord: String? = null
 }
