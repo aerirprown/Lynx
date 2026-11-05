@@ -7,6 +7,8 @@ plugins {
 dependencies {
     implementation(project(":shared"))
     implementation(compose.desktop.currentOs)
+    testImplementation(kotlin("test"))
+    testImplementation(compose.desktop.uiTestJUnit4)
 }
 
 compose.desktop {
