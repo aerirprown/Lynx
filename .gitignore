@@ -1,0 +1,8 @@
+.gradle/
+build/
+.kotlin/
+local.properties
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
