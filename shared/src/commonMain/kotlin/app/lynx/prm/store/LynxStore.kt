@@ -1,6 +1,7 @@
 package app.lynx.prm.store
 
 import app.lynx.prm.db.Clock
+import app.lynx.prm.library.Merger
 import app.lynx.prm.db.Ids
 import app.lynx.prm.db.LynxDatabase
 import app.lynx.prm.db.epochMs
@@ -91,6 +92,42 @@ class LynxStore(
         db.lynxQueries.selectPhonesForContact(contactId).executeAsList()
             .filter { it.deleted_at == null }
             .map { it.toModel() }
+
+    fun emails(contactId: String): List<EmailAddress> =
+        db.lynxQueries.selectEmailsForContact(contactId).executeAsList()
+            .filter { it.deleted_at == null }
+            .map { it.toModel() }
+
+    fun meta(key: String): String? = db.lynxQueries.selectMeta(key).executeAsOneOrNull()
+
+    fun updateContact(
+        id: String,
+        displayName: String,
+        organization: String?,
+        jobTitle: String?,
+        kind: String,
+        phones: List<PhoneImport>,
+        emails: List<EmailImport>,
+    ) {
+        require(displayName.isNotBlank()) { "A contact needs a name." }
+        require(kind in KINDS) { "Unknown contact kind." }
+        val current = db.lynxQueries.selectContact(id).executeAsOne()
+        val now = clock.epochMs()
+        db.lynxQueries.upsertContact(
+            id = current.id,
+            displayName = displayName.trim(),
+            organization = organization?.trim()?.ifEmpty { null },
+            jobTitle = jobTitle?.trim()?.ifEmpty { null },
+            kind = kind,
+            androidLookupKey = current.android_lookup_key,
+            createdAt = current.created_at,
+            updatedAt = now,
+            updatedBy = deviceId,
+            deletedAt = current.deleted_at,
+        )
+        syncPhones(id, phones, now)
+        syncEmails(id, emails, now)
+    }
 
     fun importContacts(rows: List<ContactImport>) {
         for (row in rows) {
@@ -261,6 +298,15 @@ class LynxStore(
         db.lynxQueries.upsertTag(tag.id, tag.name, tag.created_at, now, deviceId, now)
     }
 
+    fun renameTag(id: String, name: String) {
+        val trimmed = name.trim()
+        require(trimmed.isNotEmpty()) { "A tag needs a name." }
+        val tag = db.lynxQueries.selectTag(id).executeAsOne()
+        val now = clock.epochMs()
+        db.lynxQueries.upsertTag(tag.id, trimmed, tag.created_at, now, deviceId, tag.deleted_at)
+        Merger.collapseTags(db, now, deviceId)
+    }
+
     fun visibleTags(): List<Tag> =
         db.lynxQueries.selectAllTags().executeAsList().filter { it.deleted_at == null }.map { it.toModel() }
 
@@ -296,6 +342,26 @@ class LynxStore(
             now,
             deviceId,
             current.deleted_at,
+        )
+    }
+
+    fun updateReminder(id: String, body: String, dueAt: Long) {
+        require(body.isNotBlank()) { "A reminder needs text." }
+        val current = db.lynxQueries.selectReminder(id).executeAsOne()
+        if (current.done_at != null || current.deleted_at != null) return
+        val now = clock.epochMs()
+        db.lynxQueries.upsertReminder(
+            current.id, current.contact_id, current.note_id, body, dueAt, null,
+            current.created_at, now, deviceId, null,
+        )
+    }
+
+    fun deleteReminder(id: String) {
+        val current = db.lynxQueries.selectReminder(id).executeAsOne()
+        val now = clock.epochMs()
+        db.lynxQueries.upsertReminder(
+            current.id, current.contact_id, current.note_id, current.body, current.due_at, current.done_at,
+            current.created_at, now, deviceId, now,
         )
     }
 

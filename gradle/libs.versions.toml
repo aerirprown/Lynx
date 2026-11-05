@@ -4,6 +4,13 @@ sqldelight = "2.4.1"
 coroutines = "1.10.2"
 datetime = "0.6.2"
 libphonenumber = "8.13.55"
+compose = "1.11.1"
+agp = "9.5.1"
+activityCompose = "1.10.1"
+work = "2.10.1"
+documentfile = "1.1.0"
+coreKtx = "1.15.0"
+lifecycle = "2.8.7"
 
 [libraries]
 sqldelight-runtime = { module = "app.cash.sqldelight:runtime", version.ref = "sqldelight" }
@@ -11,7 +18,20 @@ sqldelight-jdbc = { module = "app.cash.sqldelight:sqlite-driver", version.ref = 
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
 libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", version.ref = "libphonenumber" }
+sqldelight-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
+core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
