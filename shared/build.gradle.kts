@@ -50,7 +50,8 @@ sqldelight {
     databases {
         create("LynxDatabase") {
             packageName.set("app.lynx.prm.db")
-            dialect("app.cash.sqldelight:sqlite-3-38-dialect:2.4.1")
+            // minSdk 29 is Android 10, which ships SQLite 3.22. This stops anything newer compiling.
+            dialect("app.cash.sqldelight:sqlite-3-18-dialect:2.4.1")
         }
     }
 }

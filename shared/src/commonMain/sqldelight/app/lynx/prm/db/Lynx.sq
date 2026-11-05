@@ -96,33 +96,61 @@ CREATE INDEX contact_tag_tag ON contact_tag(tag_id);
 CREATE INDEX reminder_open_due ON reminder(done_at, due_at);
 CREATE INDEX contact_lookup ON contact(android_lookup_key);
 
-upsertMeta:
-INSERT INTO meta(key, value)
-VALUES (:key, :value)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+upsertMeta {
+  INSERT OR IGNORE INTO meta(
+    key,
+    value
+  ) VALUES (
+    :key,
+    :value
+  );
+  UPDATE meta SET
+    value = :value
+  WHERE key = :key;
+}
 
 selectMeta:
 SELECT value FROM meta WHERE key = :key;
 
-upsertContact:
-INSERT INTO contact(
-  id, display_name, organization, job_title, kind, android_lookup_key, merged_into,
-  created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :displayName, :organization, :jobTitle, :kind, :androidLookupKey, :mergedInto,
-  :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  display_name = excluded.display_name,
-  organization = excluded.organization,
-  job_title = excluded.job_title,
-  kind = excluded.kind,
-  android_lookup_key = excluded.android_lookup_key,
-  merged_into = excluded.merged_into,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertContact {
+  INSERT OR IGNORE INTO contact(
+    id,
+    display_name,
+    organization,
+    job_title,
+    kind,
+    android_lookup_key,
+    merged_into,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :displayName,
+    :organization,
+    :jobTitle,
+    :kind,
+    :androidLookupKey,
+    :mergedInto,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE contact SET
+    display_name = :displayName,
+    organization = :organization,
+    job_title = :jobTitle,
+    kind = :kind,
+    android_lookup_key = :androidLookupKey,
+    merged_into = :mergedInto,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllContacts:
 SELECT * FROM contact;
@@ -138,21 +166,39 @@ UPDATE contact
 SET merged_into = :survivorId, deleted_at = :now, updated_at = :now, updated_by = :updatedBy
 WHERE id = :id;
 
-upsertPhone:
-INSERT INTO phone(
-  id, contact_id, raw, normalized, label, created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :contactId, :raw, :normalized, :label, :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  contact_id = excluded.contact_id,
-  raw = excluded.raw,
-  normalized = excluded.normalized,
-  label = excluded.label,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertPhone {
+  INSERT OR IGNORE INTO phone(
+    id,
+    contact_id,
+    raw,
+    normalized,
+    label,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :contactId,
+    :raw,
+    :normalized,
+    :label,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE phone SET
+    contact_id = :contactId,
+    raw = :raw,
+    normalized = :normalized,
+    label = :label,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllPhones:
 SELECT * FROM phone;
@@ -160,20 +206,36 @@ SELECT * FROM phone;
 selectPhonesForContact:
 SELECT * FROM phone WHERE contact_id = :contactId;
 
-upsertEmail:
-INSERT INTO email(
-  id, contact_id, address, label, created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :contactId, :address, :label, :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  contact_id = excluded.contact_id,
-  address = excluded.address,
-  label = excluded.label,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertEmail {
+  INSERT OR IGNORE INTO email(
+    id,
+    contact_id,
+    address,
+    label,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :contactId,
+    :address,
+    :label,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE email SET
+    contact_id = :contactId,
+    address = :address,
+    label = :label,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllEmails:
 SELECT * FROM email;
@@ -210,26 +272,48 @@ UPDATE email SET deleted_at = :now, updated_at = :now, updated_by = :updatedBy W
 softDeleteContactTag:
 UPDATE contact_tag SET deleted_at = :now, updated_at = :now, updated_by = :updatedBy WHERE id = :id;
 
-upsertNote:
-INSERT INTO note(
-  id, contact_id, body, source, call_direction, call_number_raw, call_number_normalized,
-  occurred_at, created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :contactId, :body, :source, :callDirection, :callNumberRaw, :callNumberNormalized,
-  :occurredAt, :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  contact_id = excluded.contact_id,
-  body = excluded.body,
-  source = excluded.source,
-  call_direction = excluded.call_direction,
-  call_number_raw = excluded.call_number_raw,
-  call_number_normalized = excluded.call_number_normalized,
-  occurred_at = excluded.occurred_at,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertNote {
+  INSERT OR IGNORE INTO note(
+    id,
+    contact_id,
+    body,
+    source,
+    call_direction,
+    call_number_raw,
+    call_number_normalized,
+    occurred_at,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :contactId,
+    :body,
+    :source,
+    :callDirection,
+    :callNumberRaw,
+    :callNumberNormalized,
+    :occurredAt,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE note SET
+    contact_id = :contactId,
+    body = :body,
+    source = :source,
+    call_direction = :callDirection,
+    call_number_raw = :callNumberRaw,
+    call_number_normalized = :callNumberNormalized,
+    occurred_at = :occurredAt,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllNotes:
 SELECT * FROM note;
@@ -242,15 +326,30 @@ SELECT * FROM note
 WHERE contact_id = :contactId AND deleted_at IS NULL
 ORDER BY occurred_at DESC;
 
-upsertTag:
-INSERT INTO tag(id, name, created_at, updated_at, updated_by, deleted_at)
-VALUES (:id, :name, :createdAt, :updatedAt, :updatedBy, :deletedAt)
-ON CONFLICT(id) DO UPDATE SET
-  name = excluded.name,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertTag {
+  INSERT OR IGNORE INTO tag(
+    id,
+    name,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :name,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE tag SET
+    name = :name,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllTags:
 SELECT * FROM tag;
@@ -258,19 +357,33 @@ SELECT * FROM tag;
 selectTag:
 SELECT * FROM tag WHERE id = :id;
 
-upsertContactTag:
-INSERT INTO contact_tag(
-  id, contact_id, tag_id, created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :contactId, :tagId, :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  contact_id = excluded.contact_id,
-  tag_id = excluded.tag_id,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertContactTag {
+  INSERT OR IGNORE INTO contact_tag(
+    id,
+    contact_id,
+    tag_id,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :contactId,
+    :tagId,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE contact_tag SET
+    contact_id = :contactId,
+    tag_id = :tagId,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllContactTags:
 SELECT * FROM contact_tag;
@@ -286,22 +399,42 @@ UPDATE contact_tag
 SET tag_id = :tagId, updated_at = :updatedAt, updated_by = :updatedBy
 WHERE id = :id;
 
-upsertReminder:
-INSERT INTO reminder(
-  id, contact_id, note_id, body, due_at, done_at, created_at, updated_at, updated_by, deleted_at
-) VALUES (
-  :id, :contactId, :noteId, :body, :dueAt, :doneAt, :createdAt, :updatedAt, :updatedBy, :deletedAt
-)
-ON CONFLICT(id) DO UPDATE SET
-  contact_id = excluded.contact_id,
-  note_id = excluded.note_id,
-  body = excluded.body,
-  due_at = excluded.due_at,
-  done_at = excluded.done_at,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  updated_by = excluded.updated_by,
-  deleted_at = excluded.deleted_at;
+upsertReminder {
+  INSERT OR IGNORE INTO reminder(
+    id,
+    contact_id,
+    note_id,
+    body,
+    due_at,
+    done_at,
+    created_at,
+    updated_at,
+    updated_by,
+    deleted_at
+  ) VALUES (
+    :id,
+    :contactId,
+    :noteId,
+    :body,
+    :dueAt,
+    :doneAt,
+    :createdAt,
+    :updatedAt,
+    :updatedBy,
+    :deletedAt
+  );
+  UPDATE reminder SET
+    contact_id = :contactId,
+    note_id = :noteId,
+    body = :body,
+    due_at = :dueAt,
+    done_at = :doneAt,
+    created_at = :createdAt,
+    updated_at = :updatedAt,
+    updated_by = :updatedBy,
+    deleted_at = :deletedAt
+  WHERE id = :id;
+}
 
 selectAllReminders:
 SELECT * FROM reminder;

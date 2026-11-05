@@ -27,7 +27,7 @@ People use it for clients, colleagues, friends, and family. A contact can be mar
 | --- | --- |
 | Language | Kotlin, current stable 2.x |
 | UI | Compose Multiplatform, Material 3, dark only, colors from the Theme section |
-| Database | SQLDelight, dialect SQLite |
+| Database | SQLDelight, dialect SQLite 3.18. Android 10 ships SQLite 3.22, so queries must not use anything newer, such as `ON CONFLICT DO UPDATE`. |
 | Phone numbers | libphonenumber (`com.googlecode.libphonenumber`) |
 | Time | `kotlinx-datetime` |
 | Concurrency | `kotlinx-coroutines` |
